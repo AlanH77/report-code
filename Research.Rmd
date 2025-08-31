@@ -1,0 +1,1695 @@
+---
+title: "Untitled"
+output: pdf_document
+date: "2025-07-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+
+male <- read.table("male.dat",header = TRUE)
+female <- read.table("female.dat",header = TRUE)
+
+# Replace 110+ with 110
+male$Age <- gsub("110\\+", "110", male$Age)
+male$Age <- as.numeric(male$Age)
+
+female$Age <- gsub("110\\+", "110", female$Age)
+female$Age <- as.numeric(female$Age)
+
+male$Sex   <- "Male"
+female$Sex <- "Female"
+
+data <- rbind(male, female)
+
+# Visualise data
+age_limits <- c(0, 1, 5, 15, 25, 35, 45, 55, 65, 75, 85, 95, 111)
+age_labels <- c("<1", "1-4", "5-14", "15-24", "25-34", "35-44",
+                "45-54", "55-64", "65-74", "75-84", "85-94", "95+")
+
+data$AgeGroup <- cut(
+  data$Age,
+  breaks = age_limits,
+  labels = age_labels,
+  right  = FALSE
+)
+
+# Calculate average mortality 
+avg_mx <- data %>%
+  group_by(Year, Sex, AgeGroup) %>%
+  summarise(mean_mx = mean(mx, na.rm = TRUE), .groups = "drop")
+
+# Plot Mortality Rates by Age Group (<1, 25–34, 95+) and Sex (1993–2022)
+library(ggplot2)
+
+ggplot(
+  filter(avg_mx, AgeGroup %in% c("<1", "25-34", "95+")),
+  aes(x = Year, y = 100 * mean_mx, color = Sex)
+) +
+  geom_line(size = 0.5) +     
+  geom_point(size = 1.5) +     
+  facet_wrap(~ AgeGroup, ncol = 1, scales = "free_y") +  
+  labs(
+    title  = " Average Mortality Rates by Age Group and Gender",
+    y      = "Mortality Rate (%)",
+    color  = "Sex"
+  ) +
+  theme_minimal(base_size = 12)
+
+
+# Life expectancy at birth:
+life_expectancy <- data %>%
+  filter(Age == 0) %>%
+  select(Year, Sex, ex)
+
+ggplot(life_expectancy, aes(x = Year, y = ex, color = Sex)) +
+  geom_line(size = 1) +
+  geom_point(size = 1.5) +
+  labs(title = "Life Expectancy at Birth by Gender (1993–2022)",
+       x = "Year",
+       y = "Life Expectancy at Birth (e)",
+       color = "Sex") +
+  theme_minimal()
+
+life_expectancy_diff <- life_expectancy %>%
+  pivot_wider(names_from = Sex, values_from = ex) %>%
+  mutate(Diff = Male - Female)   
+
+print(life_expectancy_diff)
+```
+
+
+```{r}
+## Fit Standard Lee-Cater model for male 
+ages_male <- sort(unique(male$Age))
+years_male <- sort(unique(male$Year))
+
+# Define the log-mortality matrix of male
+log_mortality_male <- matrix(
+  NA, nrow = length(ages_male), ncol = length(years_male),
+  dimnames = list(ages_male, years_male))
+
+for (i in 1:nrow(male)) {
+  age_i <- male$Age[i]
+  year_i <- male$Year[i]
+  mx_i <- male$mx[i]
+  log_mortality_male[as.character(age_i), as.character(year_i)] <- log(mx_i)
+}
+
+# T = 30 years
+T <- ncol(log_mortality_male)
+print(T)
+
+# Calculate a_hat and normalize central death rates
+a_hat_male <- (1/T) * rowSums(log_mortality_male)
+Z_male <- log_mortality_male - a_hat_male
+
+# SVD to derive b_hat and K_hat
+svd <- svd(Z_male)
+
+b_hat_male <- -svd$u[, 1]
+sum_b <- sum(b_hat_male)
+b_hat_male <- b_hat_male / sum_b
+k_hat_male <- -sum_b * svd$d[1] * svd$v[, 1]
+k_hat_male <- k_hat_male - mean(k_hat_male)
+
+# Calculate explanation ratio for separate LC model
+# For males:
+numeritor_male <- sum((log_mortality_male - a_hat_male - outer(b_hat_male, k_hat_male, "*"))^2)
+denominator_male <- sum((log_mortality_male - a_hat_male)^2)
+R_S_male <- 1 - numeritor_male/denominator_male 
+cat("Separate-LC Explanation Ratio (male):", round(R_S_male, 4), "\n")
+
+# Plot estimates of male specific a_hat, b_hat and k_hat
+plot(years_male, k_hat_male, type = "l", pch = 16, lwd = 2,
+     xlab = "Years", ylab = expression(hat(k)[t]),
+     main = "k_hat (M)")
+
+plot(ages_male, a_hat_male, type = "l", pch = 16, lwd = 2,
+     xlab = "Age Groups", ylab = expression(hat(a)[x]),
+     main = "a_hat (M)")
+
+plot(ages_male, b_hat_male, type = "l", pch = 16, lwd = 2,
+     xlab = "Age Groups", ylab = expression(hat(b)[x]),
+     main = "b_hat (M)")
+```
+```{r}
+## Again Fit Standard Lee-Cater model for female 
+ages_female <- sort(unique(female$Age))
+years_female <- sort(unique(female$Year))
+
+# Define the log-mortality matrix of female
+log_mortality_female <- matrix(
+  NA, nrow = length(ages_female), ncol = length(years_female),
+  dimnames = list(ages_female, years_female)
+)
+
+for (i in 1:nrow(female)) {
+  age_i <- female$Age[i]
+  year_i <- female$Year[i]
+  mx_i <- female$mx[i]
+  log_mortality_female[as.character(age_i), as.character(year_i)] <- log(mx_i)
+}
+
+# Estimation Step
+T <- ncol(log_mortality_female)
+a_hat_female <- (1/T) * rowSums(log_mortality_female)
+Z_female <- log_mortality_female - a_hat_female
+
+svd_female <- svd(Z_female)
+
+b_hat_female <- -svd_female$u[, 1]
+sum_b <- sum(b_hat_female)
+b_hat_female <- b_hat_female / sum_b
+k_hat_female <- -sum_b * svd_female$d[1] * svd_female$v[, 1]
+k_hat_female <- k_hat_female - mean(k_hat_female)
+
+# Calculate explanation ratio for separate LC model
+# For females:
+numeritor_female <- sum((log_mortality_female - a_hat_female - outer(b_hat_female, k_hat_female, "*"))^2)
+denominator_female <- sum((log_mortality_female - a_hat_female)^2)
+R_S_female <- 1 - numeritor_female/denominator_female 
+cat("Separate-LC Explanation Ratio (female):", round(R_S_female, 4), "\n")
+
+
+# Plot estimates of female specific a_hat, b_hat and K_hat
+
+# K_t
+plot(years_female, k_hat_female, type = "l", lwd = 2, col = "red",
+     xlab = "Years", ylab = "K_t",
+     ylim = c(-20, 30), 
+     main = "k_hat (Male vs Female)")
+
+lines(years_male, k_hat_male, col = "blue", lwd = 2)
+legend("bottomleft",
+       legend = c("Female", "Male"),
+       col = c("red", "blue"),
+       lwd = 2)
+
+# a_x
+plot(ages_female, a_hat_female, type = "l", col = "red", lwd = 2,
+     xlab = "Ages", ylab = "a_x",
+     main = "a_hat (Male vs Female)")
+
+lines(ages_male, a_hat_male, col = "blue", lwd = 2)
+legend("bottomright", legend = c("Female", "Male"),
+       col = c("red", "blue"), lwd = 2)
+
+# b_x
+plot(ages_female, b_hat_female, type = "l", col = "red", lwd = 2,
+     xlab = "Ages", ylab = "b_x",
+     main = "b_hat (Male vs Female)")
+
+lines(ages_male, b_hat_male, col = "blue", lwd = 2)
+legend("topright", legend = c("Female", "Male"),
+       col = c("red", "blue"), lwd = 2)
+
+
+```
+
+```{r}
+## Forecast K_t for [male] using random walk with drift
+# Estimate drift parameter
+print(T)     
+theta_hat_male <- (k_hat_male[T] - k_hat_male[1]) / (T - 1)
+
+# Estimate sigma^2_rw
+resid_male <- diff(k_hat_male) - theta_hat_male
+sigma2_rw_male <- sum(resid_male^2) / (T - 1)
+
+var_theta_hat_male <- sigma2_rw_male / (T - 1) 
+print(theta_hat_male)
+
+# Forecast K_hat with standard randam walk with drift parameter theta_hat
+H <- 20  # forecast 20 years ahead (2023 - 2042)
+kt_forecast_male <- numeric(H)
+kt_forecast_male[1] <- k_hat_male[T] + theta_hat_male
+
+for (h in 2:H) {
+  kt_forecast_male[h] <- kt_forecast_male[h - 1] + theta_hat_male
+}
+
+
+# Create corresponding year labels
+forecast_years <- max(years_male) + 1:H
+print(forecast_years)
+
+## Plot forecast of k_t from random walk with drift 
+plot(c(years_male, forecast_years), c(k_hat_male, kt_forecast_male), type = "l",
+     xlab = "Year", ylab = "K_t",
+     main = "Forecast of k_t(M) ")
+lines(forecast_years, kt_forecast_male, col = "blue")
+
+# Confidence interval
+kt_sd_male <- sqrt((1:H) * sigma2_rw_male)
+kt_upper_male <- kt_forecast_male + 1.96 * kt_sd_male
+kt_lower_male <- kt_forecast_male - 1.96 * kt_sd_male
+print(kt_sd_male)          # Print the s.d of forecast K_t 
+print(kt_forecast_male)
+
+lines(forecast_years, kt_upper_male, col = "blue", lty = 2)
+lines(forecast_years, kt_lower_male, col = "blue", lty = 2)
+
+# Forecast log-mortality 
+# Create a matrix to store forecasted log-mortality
+log_mortality_forecast_male <- matrix(NA, nrow = length(ages_male), ncol = H,
+                                 dimnames = list(ages_male, forecast_years))
+
+# Apply Lee-Carter formula: m_xt = a_x + b_x * k_t
+for (h in 1:H) {
+  log_mortality_forecast_male[, h] <- a_hat_male + b_hat_male * kt_forecast_male[h]
+}
+
+```
+
+
+
+
+```{r}
+## Modeling and Forecast mortality index K_t for [male] using general arima model
+## Step 1: Identification
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1),   # Control plot spacing
+    mgp=c(2,0.75,0))
+
+# Time series plot of k_t
+plot(k_hat_male, type="l", lwd=2,
+     main = "Original k_t(M) series",
+     xlab = "Time", ylab = "k_t")
+
+# Sample ACF and PACF of k_t
+acf(k_hat_male, main = "", ylab = "Correlation"); title(main="ACF")
+pacf(k_hat_male, main = "", ylab = "Correlation"); title(main="PACF")
+
+
+# Plot the first order difference
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+
+plot(diff(k_hat_male), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Differenced k_t(M)", main = "First Difference of k_t(M)")
+
+# ACF and PACF of differenced k_t
+acf(diff(k_hat_male), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of First Difference")
+
+pacf(diff(k_hat_male), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of First Difference")
+
+# Plot the second order difference
+par(mfrow = c(3, 1), mar = c(3, 3, 2, 1), mgp = c(2, 0.75, 0)) 
+
+plot(diff(k_hat_male, differences = 2), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Second-order difference",
+     main = "Second-order Differences of k_t(M)")
+
+# ACF and PACF 
+acf(diff(k_hat_male, differences =2), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of Second Difference")
+
+pacf(diff(k_hat_male, differences = 2), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of Second Difference")
+
+```
+```{r}
+library(forecast)
+
+# Fit ARIMA(1,2,0) model  
+ARIMA12 <- Arima(k_hat_male, order=c(1,2,0), include.drift = TRUE)       # Include a drift term
+print(ARIMA12)
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(ARIMA12)
+
+par(mfrow=c(1,1))
+qqnorm(resid(ARIMA12))
+AIC(ARIMA12)
+
+# Fit ARIMA(1,1,0) model with drift
+ARIMA11 <- Arima(k_hat_male, order=c(1,1,0), include.drift = TRUE)
+print(ARIMA11)
+
+# Fit ARIMA(1,1,1) - Fail try
+ARIMA111 <- Arima(k_hat_male, order=c(1,1,1),include.drift = TRUE)
+print(ARIMA111)
+
+# Fit ARIMA(0,1,1) 
+ARIMA011 <- Arima(k_hat_male, order=c(0,1,1),include.drift = TRUE)
+print(ARIMA011)
+
+# Fit ARIMA(0,1,0) 
+ARIMA010 <- Arima(k_hat_male, order=c(0,1,0),include.drift = TRUE)
+print(ARIMA010)
+
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(ARIMA11)
+par(mfrow=c(1,1))
+qqnorm(resid(ARIMA11))
+qqline(resid(ARIMA11), col = "red") 
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(ARIMA010)
+par(mfrow=c(1,1))
+qqnorm(resid(ARIMA010))
+qqline(resid(ARIMA010), col = "red") 
+
+#Interpretation: Still, second order differences of K_t for males have a clear pattern and suitable to fit a ARIMA(1,2,0).P-values for Ljung-Box test are all significantly greater than 0.05,showing no residuals autocorrelations. However, p-values for Ljung-Box test of ARIMA(1,1,0) indicates that p-values are not significant for first few lags.
+```
+```{r}
+## Model Prediction
+# Forecast next 20 years K_t of males using ARIMA(1,1,0)
+forecast_ARIMA11<- forecast(ARIMA11, h = 20)
+print(forecast_ARIMA11)
+
+forecast_df <- data.frame(
+  Year = (max(years_male) + 1):(max(years_male) + 20),
+  Forecast = forecast_ARIMA11$mean,
+  Lower = forecast_ARIMA11$lower[,2],  # 95% lower bound
+  Upper = forecast_ARIMA11$upper[,2]   # 95% upper bound
+)
+
+## PLot forecast of K_t from ARIMA11 with drift
+plot(c(years_male, forecast_df$Year),
+     c(k_hat_male, forecast_df$Forecast),
+     type = "l", xlab = "Year", ylab = expression(hat(k)[t]),
+     ylim = c(-40, 40), main = "Forecast of k_t(M) with Drift")
+
+lines(forecast_df$Year, forecast_df$Forecast, col = "blue")
+lines(forecast_df$Year, forecast_df$Upper, col = "blue", lty = 2)
+lines(forecast_df$Year, forecast_df$Lower, col = "blue", lty = 2)
+
+```
+
+
+
+```{r}
+# Forecast next 20 years K_t of males using ARIMA(1,2,0)
+preds <- predict(ARIMA12, n.ahead = 20, se.fit = TRUE)
+print(preds)
+
+# Calculate 95% prediction intervals
+lower <- preds$pred - 1.96 * preds$se
+upper <- preds$pred + 1.96 * preds$se
+
+# Construct year labels assuming last observed year is 2022
+forecast <- data.frame(
+  Year = 2023:2042,
+  Forecast = preds$pred,
+  Lower = lower,
+  Upper = upper
+)
+
+# Print the forecast table
+print(forecast)
+
+## Plot forecast of K_t from ARIMA12 without drift
+plot(c(years_male, forecast$Year), c(k_hat_male, forecast$Forecast), type = "l",
+     xlab = "Year", ylab = expression(hat(k)[t]),
+     ylim = c(-40,40),
+     main = "Forecast of k_t(M) ")
+
+lines(forecast$Year, forecast$Forecast, col = "blue")
+lines(forecast$Year, forecast$Upper, col = "blue", lty = 2)
+lines(forecast$Year, forecast$Lower, col = "blue", lty = 2)
+```
+```{r}
+## Comparison of Forecasts from Different Models for Males
+
+# Set forecast year
+years_forecast <- (max(years_male) + 1):(max(years_male) + h)
+
+# Create data frames for each model 
+# (1) Random walk with drift
+df_rw <- data.frame(
+  Year = years_forecast,
+  Forecast = kt_forecast_male,
+  Lower = kt_lower_male,
+  Upper = kt_upper_male,
+  Model = "Random Walk"
+)
+
+# (2) ARIMA(1,1,0) with drift parameter
+df_arima <- data.frame(
+  Year = years_forecast,
+  Forecast = forecast_ARIMA11$mean,
+  Lower = forecast_ARIMA11$lower[,2],
+  Upper = forecast_ARIMA11$upper[,2],
+  Model = "ARIMA(1,1,0)"
+)
+
+# Combine all forecast results into a single long-format data frame
+forecast_all <- rbind(df_rw, df_arima)
+print(forecast_all)
+
+# Add observed values
+observed_df <- data.frame(
+  Year = years_male,
+  Forecast = k_hat_male
+)
+
+ggplot() +
+  # Observed k_t (black solid line)
+  geom_line(data = observed_df, aes(x = Year, y = Forecast), color = "black", size = 1.2) +
+  
+  # Forecast values from different models (solid lines)
+  geom_line(data = forecast_all, aes(x = Year, y = Forecast, color = Model), size = 1) +
+
+  # 95% confidence intervals (dashed lines)
+  geom_line(data = forecast_all, aes(x = Year, y = Upper, color = Model), linetype = "dashed", size = 0.7) +
+  geom_line(data = forecast_all, aes(x = Year, y = Lower, color = Model), linetype = "dashed", size = 0.7) +
+
+  labs(
+    x = "Year",
+    y = expression(hat(k)[t])
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = c(0.85, 0.85),    # Move legend inside plot (top right corner)
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  ) +
+  scale_color_manual(values = c(
+    "ARIMA(1,1,0)" = "#E41A1C",            
+    "Random Walk" = "#377EB8"             
+  ))
+
+
+```
+
+```{r}
+## Forecast K_t for [female] using random walk with drift
+# Estimate drift parameter
+print(T)     
+theta_hat_female <- (k_hat_female[T] - k_hat_female[1]) / (T - 1)
+
+# Estimate sigma^2_rw
+resid_female <- diff(k_hat_female) - theta_hat_female
+sigma2_rw_female <- sum(resid_female^2) / (T - 1)
+
+var_theta_hat_female <- sigma2_rw_female / (T - 1) 
+print(theta_hat_female)
+
+# Forecast K_hat with standard randam walk with drift parameter theta_hat
+H <- 20  # forecast 20 years ahead (2023 - 2042)
+kt_forecast_female <- numeric(H)
+kt_forecast_female[1] <- k_hat_female[T] + theta_hat_female
+
+for (h in 2:H) {
+  kt_forecast_female[h] <- kt_forecast_female[h - 1] + theta_hat_female
+}
+
+
+# Create corresponding year labels
+forecast_years <- max(years_female) + 1:H
+print(forecast_years)
+
+## Plot forecast of k_t from random walk with drift 
+plot(c(years_female, forecast_years), c(k_hat_female, kt_forecast_female), type = "l",lwd = 2,
+     xlab = "Year", ylab = "K_t",
+     main = "Forecast of k_t (F) with RWD ")
+lines(forecast_years, kt_forecast_female,lwd = 2, col = "red")
+
+# Confidence interval
+kt_sd_female <- sqrt((1:H) * sigma2_rw_female)
+kt_upper_female <- kt_forecast_female + 1.96 * kt_sd_female
+kt_lower_female <- kt_forecast_female - 1.96 * kt_sd_female
+print(kt_sd_female)          # Print the s.d of forecast K_t 
+print(kt_forecast_female)
+
+lines(forecast_years, kt_upper_female, col = "red", lwd = 2, lty = 2)
+lines(forecast_years, kt_lower_female, col = "red", lwd = 2,  lty = 2)
+
+# Forecast log-mortality 
+# Create a matrix to store forecasted log-mortality
+log_mortality_forecast_female <- matrix(NA, nrow = length(ages_female), ncol = H,
+                                 dimnames = list(ages_female, forecast_years))
+
+# Apply Lee-Carter formula: m_xt = a_x + b_x * k_t
+for (h in 1:H) {
+  log_mortality_forecast_female[, h] <- a_hat_female + b_hat_female * kt_forecast_female[h]
+}
+```
+```{r}
+## Modeling and Forecast mortality index K_t for [female] using general arima model
+## Step 1: Identification
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1),   # Control plot spacing
+    mgp=c(2,0.75,0))
+
+# Time series plot of k_t
+plot(k_hat_female, type="l", lwd=2,
+     main = "Original k_t(F) series",
+     xlab = "Time", ylab = "k_t_female")
+
+# Sample ACF and PACF of k_t
+acf(k_hat_female, main = "", ylab = "Correlation"); title(main="ACF")
+pacf(k_hat_female, main = "", ylab = "Correlation"); title(main="PACF")
+
+
+# Plot the first order difference
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+
+plot(diff(k_hat_female), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Differenced k_t(F)", main = "First Difference of k_t(F)")
+
+# ACF and PACF of differenced k_t
+acf(diff(k_hat_female), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of First Difference")
+
+pacf(diff(k_hat_female), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of First Difference")
+
+```
+```{r}
+# Fit ARIMA(1,1,0) model with drift
+arima110 <- Arima(k_hat_female, order=c(1,1,0), include.drift = TRUE)
+print(arima110)
+
+# Fit ARIMA(1,1,1) - Fail try
+arima111 <- Arima(k_hat_female, order=c(1,1,1),include.drift = TRUE)
+print(arima111)
+
+# Fit ARIMA(0,1,1) 
+arima011 <- Arima(k_hat_female, order=c(0,1,1),include.drift = TRUE)
+print(arima011)
+
+# Fit ARIMA(0,1,0) 
+arima010 <- Arima(k_hat_female, order=c(0,1,0),include.drift = TRUE)
+print(arima010)
+
+# Diagnostic plot of arima(1,1,0) with drift
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(arima110)
+par(mfrow=c(1,1))
+qqnorm(resid(arima110))
+qqline(resid(arima110), col = "red") 
+
+# Diagnostic plot of arima(0,1,0) with drift
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(arima010)
+par(mfrow=c(1,1))
+qqnorm(resid(arima010))
+qqline(resid(arima010), col = "red") 
+
+```
+
+```{r}
+# Forecast next 20 years K_t of females using ARIMA(1,1,0)
+forecast_arima110<- forecast(arima110, h = 20)
+print(forecast_arima110)
+
+forecast_df2 <- data.frame(
+  Year = (max(years_female) + 1):(max(years_female) + 20),
+  Forecast = forecast_arima110$mean,
+  Lower = forecast_arima110$lower[,2],  # 95% lower bound
+  Upper = forecast_arima110$upper[,2]   # 95% upper bound
+)
+
+## PLot forecast of K_t from ARIMA11 with drift
+plot(c(years_female, forecast_df2$Year),
+     c(k_hat_female, forecast_df2$Forecast),
+     type = "l", xlab = "Year", ylab = expression(hat(k)[t]),
+     ylim = c(-40, 40), main = "Forecast of k_t(F) with ARIMA(1,1,0)")
+
+lines(forecast_df2$Year, forecast_df2$Forecast, col = "blue")
+lines(forecast_df2$Year, forecast_df2$Upper, col = "blue", lty = 2)
+lines(forecast_df2$Year, forecast_df2$Lower, col = "blue", lty = 2)
+
+```
+```{r}
+## Comparison of Forecasts from Different Models for Females
+
+# Set forecast year
+years_forecast <- (max(years_male) + 1):(max(years_male) + h)
+
+# Create data frames for each model 
+# (1) Random walk with drift
+df2_rw <- data.frame(
+  Year = years_forecast,
+  Forecast = kt_forecast_female,
+  Lower = kt_lower_female,
+  Upper = kt_upper_female,
+  Model = "Random Walk"
+)
+
+# (2) ARIMA(1,1,0) with drift parameter
+df2_arima <- data.frame(
+  Year = years_forecast,
+  Forecast = forecast_arima110$mean,
+  Lower = forecast_arima110$lower[,2],
+  Upper = forecast_arima110$upper[,2],
+  Model = "ARIMA(1,1,0)"
+)
+
+# Combine all forecast results into a single long-format data frame
+forecast2_all <- rbind(df2_rw, df2_arima)
+print(forecast2_all)
+
+# Add observed values
+observed_df2 <- data.frame(
+  Year = years_female,
+  Forecast = k_hat_female
+)
+
+ggplot() +
+  # Observed k_t (black solid line)
+  geom_line(data = observed_df2, aes(x = Year, y = Forecast), color = "black", size = 1.2) +
+  
+  # Forecast values from different models (solid lines)
+  geom_line(data = forecast2_all, aes(x = Year, y = Forecast, color = Model), size = 1) +
+
+  # 95% confidence intervals (dashed lines)
+  geom_line(data = forecast2_all, aes(x = Year, y = Upper, color = Model), linetype = "dashed", size = 0.7) +
+  geom_line(data = forecast2_all, aes(x = Year, y = Lower, color = Model), linetype = "dashed", size = 0.7) +
+
+  labs(
+    x = "Year",
+    y = expression(hat(k)[t])
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = c(0.85, 0.85),    # Move legend inside plot (top right corner)
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  ) +
+  scale_color_manual(values = c(
+    "ARIMA(1,1,0)" = "#E41A1C",            
+    "Random Walk" = "#377EB8"             
+  ))
+
+```
+
+```{r}
+## Compare Estimation and Forecast of k_t for Males and Females
+# Combine all forecast results into a single long-format data frame
+
+df_rw$Gender <- "Male"
+df2_rw$Gender <- "Female"
+forecast3_all <- rbind(df_rw, df2_rw)
+print(forecast3_all)
+
+# Add observed values
+observed_df3 <- data.frame(
+  Year = c(years_male, years_female),
+  Forecast = c(k_hat_male, k_hat_female),
+  Gender = c(rep("Male", length(years_male)), rep("Female", length(years_female)))
+)
+
+# Plot
+ggplot() +
+  # Observed k_t with gender color
+  geom_line(data = observed_df3, aes(x = Year, y = Forecast, color = Gender, group = Gender), size = 1.2) +
+
+  # Forecast values
+  geom_line(data = forecast3_all, aes(x = Year, y = Forecast, color = Gender), size = 1) +
+
+  # 95% prediction intervals
+  geom_line(data = forecast3_all, aes(x = Year, y = Upper, color = Gender), linetype = "dashed", size = 0.7) +
+  geom_line(data = forecast3_all, aes(x = Year, y = Lower, color = Gender), linetype = "dashed", size = 0.7) +
+
+  labs(
+    title = "Forecast of k_t (Male vs Female)",
+    x = "Year",
+    y = expression(hat(k)[t])
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = c(0.85, 0.85),
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  ) +
+  scale_color_manual(values = c("Male" = "#377EB8", "Female" = "#E41A1C"))
+```
+```{r}
+## Draw the forecasted log-mortality curves by age and gender.
+
+# Step 1: Set forecast years
+forecast_years <- c(2023, 2033, 2042)
+
+# Step 2: Store forecat results 
+forecasted_log_mx <- data.frame()
+
+for (year in forecast_years) {
+  h <- year - max(years_male)
+
+  # Male log-mortality
+  log_mx_male <- a_hat_male + b_hat_male * kt_forecast_male[h]
+  df_male <- data.frame(
+    Age = ages_male,
+    log_mx = log_mx_male,
+    Year = as.factor(year),
+    Sex = "Male"
+  )
+
+  # Female log-mortality
+  log_mx_female <- a_hat_female + b_hat_female * kt_forecast_female[h]
+  df_female <- data.frame(
+    Age = ages_female,
+    log_mx = log_mx_female,
+    Year = as.factor(year),
+    Sex = "Female"
+  )
+
+  forecasted_log_mx <- rbind(forecasted_log_mx, df_male, df_female)
+}
+
+# Step 3: plots
+library(ggplot2)
+
+ggplot(forecasted_log_mx, aes(x = Age, y = log_mx, color = Year, linetype = Sex)) +
+  geom_line(size = 0.6) +
+  scale_linetype_manual(values = c("Male" = "solid", "Female" = "dotted")) +
+  labs(
+    title = "Forecasted Log Mortality Curves by Age and Gender",
+    x = "Age",
+    y = "Log Mortality Rate"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+```
+
+
+```{r}
+## Model 2: Coherent Lee-Cater Model
+## Fit Standard Lee-Cater model to the combined population to get shared b_x and k_t.
+combined_data <- read.table("Combined.dat",header = TRUE)
+
+# Replace 110+ with 110
+combined_data$Age <- gsub("110\\+", "110", combined_data$Age)
+combined_data$Age <- as.numeric(combined_data$Age)
+
+ages <- sort(unique(combined_data$Age))
+years <- sort(unique(combined_data$Year))
+
+# Define the log-mortality matrix of combined data
+log_mortality <- matrix(
+  NA, nrow = length(ages), ncol = length(years),
+  dimnames = list(ages, years))
+
+for (i in 1:nrow(combined_data)) {
+  age_i <- combined_data$Age[i]
+  year_i <- combined_data$Year[i]
+  mx_i <- combined_data$mx[i]
+  log_mortality[as.character(age_i), as.character(year_i)] <- log(mx_i)
+}
+
+# T = 30 years
+T <- ncol(log_mortality)
+print(T)
+
+# Calculate a_hat and normalize central death rates of combined data
+a_hat_combined <- (1/T) * rowSums(log_mortality)
+Z_combined <- log_mortality - a_hat_combined
+
+# SVD to derive  common b_hat and K_hat
+svd_combined <- svd(Z_combined)
+
+b_hat_common <- -svd$u[, 1]
+sum_b_common <- sum(b_hat_common)
+b_hat_common <- b_hat_common / sum_b_common
+
+k_hat_common <- -sum_b_common * svd_combined$d[1] * svd_combined$v[, 1]
+k_hat_common <- k_hat_common - mean(k_hat_common)
+sum(k_hat_common)
+
+# Plot estimates of common b_hat and k_hat
+plot(years, k_hat_common, type = "l", pch = 16, lwd = 2,
+     xlab = "Years", ylab = "K(t)",
+     main = "Common K(t) ")
+
+plot(ages, b_hat_common, type = "l", pch = 16, lwd = 2,
+     xlab = "Ages", ylab = "B(x)",
+     main = "Common B(x)")
+
+# Calculate sex-specific a_x  (same as Model 1)
+a_hat_male <- (1/T) * rowSums(log_mortality_male)
+a_hat_female <- (1/T) * rowSums(log_mortality_female)
+
+## Calculate explanation ratio R_c to measure goodness of fit of common factor model for each gender.
+# For males:
+numerator <- sum((log_mortality_male - a_hat_male - outer(b_hat_common, k_hat_common, "*") )^2)
+denominator <- sum((log_mortality_male - a_hat_male)^2)
+R_c_male <- 1 - (numerator / denominator)
+print(paste("Explanation ratio for males: ", round(R_c_male, 4)))
+
+# For females:
+numerator2 <- sum((log_mortality_female - a_hat_female - outer(b_hat_common, k_hat_common, "*") )^2)
+denominator2 <- sum((log_mortality_female - a_hat_female)^2)
+R_c_female <- 1 - (numerator2 / denominator2)
+print(paste("Explanation ratio for females: ", round(R_c_female, 4)))
+```
+```{r}
+library(scales)
+
+## Introduce the specific factors to describe the residual matrix of common factor model.
+# Residuals for males
+R_male <- log_mortality_male - a_hat_male  # subtract a_x
+R_male <- R_male - outer(b_hat_common, k_hat_common)  # subtract B(x)K(t)
+
+# Residuals for females
+R_female <- log_mortality_female - a_hat_female  
+R_female <- R_female - outer(b_hat_common, k_hat_common) 
+
+# SVD to the new residual matrix 
+svd_m   <- svd(R_male)
+b0_spec_male <- - svd_m$u[,1]
+sum0_spec_male <- sum(b0_spec_male)
+b_spec_male   <- b0_spec_male / sum0_spec_male
+k_spec_male <- - sum(b0_spec_male) * svd_m$d[1] * svd_m$v[,1]
+k_spec_male <- k_spec_male - mean(k_spec_male)
+
+svd_f   <- svd(R_female)
+b0_spec_female <- - svd_f$u[,1]
+sum0_spec_female <- sum(b0_spec_female)
+b_spec_female   <- b0_spec_female / sum0_spec_female
+k_spec_female <- - sum(b0_spec_female) * svd_f$d[1] * svd_f$v[,1]
+
+plot(years, k_spec_male, type = "l", pch = 16, lwd = 2,
+     xlab = "Years", ylab = "k_t",
+     main = " Specific k_hat (M) ")
+
+plot(years, k_spec_female, type = "l", pch = 16, lwd = 2,
+     xlab = "Years", ylab = "k_t",
+     main = "Specific k_hat (F) ")
+
+
+plot(ages, b_spec_male, type = "l", pch = 16, lwd = 2,
+     xlab = "Ages", ylab = "b_x",
+     main = " Specific b_x (M) ")
+
+plot(ages, b_spec_female, type = "l", pch = 16, lwd = 2,
+     xlab = "Ages", ylab = "b_x",
+     main = " Specific b_x (F) ")
+
+```
+```{r}
+# 1.Total variability
+total_var_male   <- sum((log_mortality_male   - a_hat_male)^2)
+total_var_female <- sum((log_mortality_female - a_hat_female)^2)
+
+# 2.Common factor 
+common_fit_male   <- outer(b_hat_common, k_hat_common)
+common_fit_female <- outer(b_hat_common, k_hat_common)
+
+common_var_male   <- sum(common_fit_male^2)
+common_var_female <- sum(common_fit_female^2)
+
+# 3.Specific factor 
+spec_fit_male   <- outer(b_spec_male,   k_spec_male)
+spec_fit_female <- outer(b_spec_female, k_spec_female)
+
+spec_var_male   <- sum(spec_fit_male^2)
+spec_var_female <- sum(spec_fit_female^2)
+
+# 4.percentage of explanation
+R_common_male   <- common_var_male   / total_var_male
+R_common_female <- common_var_female / total_var_female
+
+R_spec_male     <- spec_var_male     / total_var_male
+R_spec_female   <- spec_var_female   / total_var_female
+
+cat("Male - Common factor explanation:", R_common_male, "\n")
+cat("Male - Specific factor explanation:", R_spec_male, "\n")
+cat("Female - Common factor explanation:", R_common_female, "\n")
+cat("Female - Specific factor explanation:", R_spec_female, "\n")
+```
+
+```{r}
+## Comparison of heatmaps for males
+library(dplyr)
+library(tidyr)
+
+# (1) Separate LC model for males
+# Calculate fitted log-mortality of males and corresponding residuals
+log_mortality_fitted_male <- outer(b_hat_male, k_hat_male) + a_hat_male
+residuals_male <- log_mortality_male - log_mortality_fitted_male
+
+# Convert wide format into long format
+resid_df <- as.data.frame(residuals_male)
+colnames(resid_df) <- years_male
+resid_df$Age <- ages_male
+
+resid_long <- resid_df %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+# Remove ages between 0 and 0
+resid_long_filtered <- resid_long %>% filter(Age > 30)
+
+
+# (2) Coherent modelling for males
+# Calculate fitted log mortality for males
+log_mortality_fitted_male2 <- outer(b_hat_common, k_hat_common) + 
+                              a_hat_male
+
+residuals_male2 <- log_mortality_male - log_mortality_fitted_male2
+
+# Convert into long format
+resid_df2 <- as.data.frame(residuals_male2)
+colnames(resid_df2) <- years_male
+resid_df2$Age <- ages_male
+
+resid_long2 <- resid_df2 %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+resid_long_filtered2 <- resid_long2 %>% filter(Age > 30)
+
+## Plot
+res_all <- c(as.numeric(residuals_male),
+             as.numeric(residuals_male2))
+
+q <- quantile(res_all, probs = c(0.01, 0.99), na.rm = TRUE)  
+L <- max(abs(q))
+lims <- c(-L, L)
+
+# Construct heatmap of residuals (difference between fitted value and data)
+# (1)
+ggplot(resid_long_filtered, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                       midpoint = 0, limits = lims, oob = squish,
+                       breaks = seq(lims[1], lims[2], by = diff(lims)/4)) +
+  labs(
+    title = "Heatmap of Residuals (Male): Observed - Fitted",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust = 0.5), 
+    axis.title.x = element_text(size = 14), 
+    axis.title.y = element_text(size = 14)  
+  )
+
+# (2)
+ggplot(resid_long_filtered2, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                       midpoint = 0, limits = lims, oob = squish,
+                       breaks = seq(lims[1], lims[2], by = diff(lims)/4)) +
+  labs(
+    title = "Heatmap of Residuals (Male): Observed - Fitted (Common)",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust = 0.5), 
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14) 
+  )
+```
+
+```{r}
+## Comparison of heatmaps for females
+
+# (1) Separate LC model for females 
+# Calculate fitted log-mortality of females and corresponding residuals
+log_mortality_fitted_female <- outer(b_hat_female, k_hat_female) + a_hat_female
+residuals_female <- log_mortality_female - log_mortality_fitted_female
+
+# Convert wide format into long format
+resid_df3 <- as.data.frame(residuals_female)
+colnames(resid_df3) <- years_female
+resid_df3$Age <- ages_female
+
+resid_long3 <- resid_df3 %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+# Remove ages between 0 and 30
+resid_long_filtered3 <- resid_long3 %>% filter(Age > 30)
+
+# (2) Coherent modelling for females
+log_mortality_fitted_female2 <- outer(b_hat_common, k_hat_common) + 
+                             a_hat_female
+
+residuals_female2 <- log_mortality_female - log_mortality_fitted_female2
+
+# Convert into long format
+resid_df4 <- as.data.frame(residuals_female2)
+colnames(resid_df4) <- years_female
+resid_df4$Age <- ages_female
+
+resid_long4 <- resid_df4 %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+resid_long_filtered4 <- resid_long4 %>% filter(Age > 30)
+
+# Plot
+res_all2 <- c(as.numeric(residuals_female),
+             as.numeric(residuals_female2))
+
+q <- quantile(res_all2, probs = c(0.01, 0.99), na.rm = TRUE)  
+L <- max(abs(q))
+lims <- c(-L, L)
+
+# (1)
+ggplot(resid_long_filtered3, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+   scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                       midpoint = 0, limits = lims, oob = squish,
+                       breaks = seq(lims[1], lims[2], by = diff(lims)/4)) +
+  labs(
+    title = "Heatmap of Residuals (Female): Observed - Fitted",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust = 0.5), 
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14) 
+  )
+
+# (2)
+ggplot(resid_long_filtered4, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+   scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                       midpoint = 0, limits = lims, oob = squish,
+                       breaks = seq(lims[1], lims[2], by = diff(lims)/4)) +
+  labs(
+    title = "Heatmap of Residuals (Female): Observed - Fitted (Common)",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15, hjust = 0.5), 
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14) 
+  )
+```
+
+```{r}
+## Calculate explanation ratio R_ac to measure goodness of fit of specific factor model for each gender.
+# For males:
+# Numerator: RSS with full model (common + specific)
+numerator_3 <- sum((log_mortality_male - a_hat_male 
+                       - outer(b_hat_common, k_hat_common) 
+                       - outer(b_spec_male, k_spec_male))^2)
+
+# Denominator: RSS with only a(x)
+denominator_3 <- sum((log_mortality_male - a_hat_male)^2)
+
+# Explanation ratio: R_ac
+R_ac_male <- 1 - (numerator_3 / denominator_3)
+print(paste("Explanation ratio with common + specific (males):", round(R_ac_male, 4)))
+
+# For females:
+numerator_4 <- sum((log_mortality_female - a_hat_female 
+                       - outer(b_hat_common, k_hat_common) 
+                       - outer(b_spec_female, k_spec_female))^2)
+
+denominator_4 <- sum((log_mortality_female - a_hat_female)^2)
+
+R_ac_female <- 1 - (numerator_4 / denominator_4)
+print(paste("Explanation ratio with common + specific (females):", round(R_ac_female, 4)))
+
+
+```
+
+```{r}
+## Choose suitable forecasting model for specific factor k(t,i).
+# Returns: which model (AR(1) or RW) fits better, plus coefficients/variance/explanation ratios
+pick_model_for_k <- function(k_vec) {
+  k <- as.numeric(k_vec)
+  stopifnot(length(k) >= 5)       
+  Tn <- length(k)
+
+  ## AR(1): k_t = c0 + c1 * k_{t-1} + e_t 
+  y <- k[-1]
+  x <- k[-Tn]
+  fit_ar1 <- lm(y ~ x)            # OLS with intercept
+  c0 <- coef(fit_ar1)[1]
+  c1 <- coef(fit_ar1)[2]
+  res_ar1 <- resid(fit_ar1)
+  rss_ar1 <- sum(res_ar1^2)
+  tss     <- sum((y - mean(y))^2) # same baseline used for the explanation ratio
+  R_AR1   <- 1 - rss_ar1/tss
+  sigma_ar1 <- sqrt(rss_ar1 / (length(res_ar1) - 2))  # residual std. dev.
+
+  ## RW: k_t = k_{t-1} + e_t
+  res_rw   <- diff(k)             # one-step forecast errors: k_t - k_{t-1}
+  rss_rw   <- sum(res_rw^2)
+  # Use the same baseline (TSS on y = k[-1]) for comparability with AR(1)
+  R_RW     <- 1 - rss_rw/tss
+  sigma_rw <- sqrt(rss_rw / (Tn - 1))
+
+  ## Selection: notice that AR(1) must also satisfy |c1| < 1 to keep stationary
+  best <- if (R_AR1 > R_RW && abs(c1) < 1) "AR1" else "RW"
+
+  list(
+    best = best,
+    AR1 = list(c0 = c0, c1 = c1, sigma = sigma_ar1, R_expl = R_AR1),
+    RW  = list(sigma = sigma_rw, R_expl = R_RW)
+  )
+}
+
+res_male   <- pick_model_for_k(k_spec_male)
+res_female <- pick_model_for_k(k_spec_female)
+
+# For males:
+res_male$best      # "AR1" 或 "RW", which one is better
+res_male$AR1       # c0, c1, sigma, R_expl
+res_male$RW        # sigma, R_expl
+
+# For females:
+res_female$best      
+res_female$AR1      
+res_female$RW  
+
+```
+
+```{r}
+## Modeling and forecast common K_t using general arima model
+## Step 1: Identification
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1),   # Control plot spacing
+    mgp=c(2,0.75,0))
+
+# Time series plot of k_t
+plot(k_hat_common, type="l", lwd=2,
+     main = "Common k_t series",
+     xlab = "Time", ylab = "Common_k_t")
+
+# Sample ACF and PACF of k_t
+acf(k_hat_common, main = "", ylab = "Correlation"); title(main="ACF")
+pacf(k_hat_common, main = "", ylab = "Correlation"); title(main="PACF")
+
+
+# Plot the first order difference
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+
+plot(diff(k_hat_common), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Differenced k_t", main = "First Difference of Common k_t")
+
+# ACF and PACF of differenced k_t
+acf(diff(k_hat_common), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of First Difference")
+
+pacf(diff(k_hat_common), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of First Difference")
+```
+```{r}
+# Fit ARIMA(1,1,0) model with drift
+Arima110 <- Arima(k_hat_common, order=c(1,1,0), include.drift = TRUE)
+print(Arima110)
+
+# Fit ARIMA(1,1,1) - Fail try
+Arima111 <- Arima(k_hat_common, order=c(1,1,1),include.drift = TRUE)
+print(Arima111)
+
+# Fit ARIMA(0,1,1) 
+Arima011 <- Arima(k_hat_common, order=c(0,1,1),include.drift = TRUE)
+print(Arima011)
+
+# Fit ARIMA(0,1,0) 
+Arima010 <- Arima(k_hat_common, order=c(0,1,0),include.drift = TRUE)
+print(Arima010)
+
+# Diagnostic plot of Arima(1,1,0) with drift
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(Arima110)
+par(mfrow=c(1,1))
+qqnorm(resid(Arima110))
+
+# Diagnostic plot of Arima(0,1,0) with drift
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(Arima010)
+par(mfrow=c(1,1))
+qqnorm(resid(Arima010))
+```
+
+```{r}
+## Forecast next 20 years common K(t) using Arima(0,1,0)
+
+forecast_Arima010<- forecast(Arima010, h = 20)
+print(forecast_arima110)
+
+forecast_df3 <- data.frame(
+  Year = years_forecast,
+  Forecast = forecast_Arima010$mean,
+  Lower = forecast_Arima010$lower[,2],  # 95% lower bound
+  Upper = forecast_Arima010$upper[,2]   # 95% upper bound
+)
+
+## PLot forecast of K(t) from random walk with drift
+plot(years,k_hat_common,
+     type = "l", xlab = "Year", ylab = "k_t", lwd = 2,
+     ylim = c(-50, 40),
+     xlim = c(min(years), max(forecast_df$Year)),
+     main = "Forecast of Common K(t) with RWD")
+
+lines(forecast_df3$Year, forecast_df3$Forecast, lwd = 2)
+lines(forecast_df3$Year, forecast_df3$Upper, lwd = 2, lty = 2)
+lines(forecast_df3$Year, forecast_df3$Lower, lwd = 2,  lty = 2)
+```
+
+
+
+```{r}
+## Step 0
+kt    <- as.numeric(k_hat_common)
+stopifnot(length(kt) == length(years))
+
+Tn <- length(kt)
+min_seg <- 8L      # Minimum Length 
+idx_min <- 1L + min_seg     
+idx_max <- Tn - min_seg
+
+# Specify shock years due to pandemic for xreg term
+pulse_years <- c(2020L, 2021L) 
+pulse_idx_all <- which(years %in% pulse_years) 
+cat(sprintf("T = %d, candidate breakpoint index range: [%d, %d] => year range: [%d, %d]\n", 
+            Tn, idx_min, idx_max, years[idx_min], years[idx_max]))
+
+# Step 1: RWD to the Common Factor Model without break
+# Treat pulse year as indicator variables to reduce their effects on the estimation of parameters.
+make_pulse_xreg <- function(n, pulse_idx) {
+  if (length(pulse_idx) == 0L) return(NULL)
+  X <- matrix(0, nrow = n, ncol = length(pulse_idx))
+  colnames(X) <- paste0("D", pulse_idx)    
+  X[cbind(pulse_idx, seq_along(pulse_idx))] <- 1
+  X
+}
+
+X_all <- make_pulse_xreg(Tn, pulse_idx_all)
+
+fit_rwd <- function(y, xreg = NULL) {
+  fit <- Arima(y, order = c(0,1,0), include.drift = TRUE,
+               xreg = xreg, method = "ML")
+  list(
+    fit = fit,
+    loglik = as.numeric(logLik(fit)),
+    drift  = unname(coef(fit)["drift"]),  
+    sigma2 = fit$sigma2
+  )
+}
+
+base <- fit_rwd(kt, xreg = X_all)
+print(base)
+```
+
+```{r}
+## Test the significance of indicator (pulse year)
+## M0: RWD with drift (no pulse)
+fit0 <- Arima(kt, order = c(0,1,0), include.drift = TRUE, method = "ML")
+
+## M1: RWD with drift + pulse years (2020/2021)
+fit1 <- Arima(kt, order = c(0,1,0), include.drift = TRUE,
+              xreg = X_all, method = "ML")
+
+## log-likelihood, AIC and BIC
+L0   <- as.numeric(logLik(fit0));  L1   <- as.numeric(logLik(fit1))
+AIC0 <- AIC(fit0);  AIC1 <- AIC(fit1)
+BIC0 <- BIC(fit0);  BIC1 <- BIC(fit1)
+
+cat(sprintf("\n[Model comparison before segmentation]\n"))
+cat(sprintf("M0 (no pulse):  logLik = %8.3f | AIC = %8.3f | BIC = %8.3f\n", L0, AIC0, BIC0))
+cat(sprintf("M1 (with pulse): logLik = %8.3f | AIC = %8.3f | BIC = %8.3f\n", L1, AIC1, BIC1))
+
+## Likelihood Ratio Test (M0 Vs. M1)
+k_diff <- if (is.null(X_all)) 0L else ncol(X_all)   
+LR     <- 2*(L1 - L0)
+p_LRT  <- if (k_diff > 0) pchisq(LR, df = k_diff, lower.tail = FALSE) else NA_real_
+
+cat(sprintf("Likelihood-ratio test: LR = %.2f, df = %d, p-value = %.4f\n", LR, k_diff, p_LRT))
+```
+
+```{r}
+##  Add: model with only the 2020 dummy (one-pulse model) 
+
+# Create the pulse regressor for 2020
+idx_2020 <- which(years == 2020L)
+X_20     <- make_pulse_xreg(Tn, idx_2020) 
+
+## M2: RWD with drift + D2020  (one pulse)
+fit2 <- Arima(kt, order = c(0,1,0), include.drift = TRUE,
+               xreg = X_20, method = "ML")
+
+print(fit2)
+
+L2   <- as.numeric(logLik(fit2))
+AIC2 <- AIC(fit2)
+BIC2 <- BIC(fit2)
+
+cat(sprintf("M2 (with D2020): logLik = %8.3f | AIC = %8.3f | BIC = %8.3f\n",
+            L2, AIC2, BIC2))
+
+## LRT ：M0 (baseline) vs M2 (2020)
+k_diff_20 <- if (is.null(X_20)) 0L else ncol(X_20)  
+LR_20     <- 2*(L2 - L0)
+p_LRT_20  <- if (k_diff_20 > 0) pchisq(LR_20, df = k_diff_20, lower.tail = FALSE) else NA_real_
+
+cat(sprintf("LRT: M0 vs M2 (add D2020): LR = %.2f, df = %d, p = %.4f\n",
+            LR_20, k_diff_20, p_LRT_20))
+
+## LRT：M2(2020) vs M1(2020+2021)
+k_diff_step <- (if (is.null(X_all)) 0L else ncol(X_all)) - k_diff_20  # 通常=1
+LR_step     <- 2*(L1 - L2)
+p_LRT_step  <- if (k_diff_step > 0) pchisq(LR_step, df = k_diff_step, lower.tail = FALSE) else NA_real_
+
+cat(sprintf("LRT: M2 vs M1 (add D2021 on top of D2020): LR = %.2f, df = %d, p = %.4f\n",
+            LR_step, k_diff_step, p_LRT_step))
+
+## Estimate and test the 2020 dummy coefficient
+co2 <- coef(fit2); se2 <- sqrt(diag(vcov(fit2)))
+ix2 <- grep("^D", names(co2))   # matches D2020
+if (length(ix2) > 0) {
+  z  <- co2[ix2]/se2[ix2]
+  pz <- 2*pnorm(-abs(z))
+  tab2 <- data.frame(Coef = names(co2)[ix2],
+                     Estimate = unname(co2[ix2]),
+                     SE = unname(se2[ix2]),
+                     z = unname(z),
+                     p = unname(pz))
+  print(tab2, row.names = FALSE)
+} else {
+  cat("Note: X_20 is NULL (no 2020 in years), cannot estimate D2020.\n")
+}
+
+```
+
+```{r}
+## Profile search over breaks 
+
+cand <- idx_min:idx_max     # Candidate set of breakpoint 
+AICv <- numeric(length(cand))
+Lsum <- AICv 
+
+for(u in seq_along(cand)) {
+  s <- cand[u]
+  
+ f1 <- fit_rwd(kt[1:s])
+ f2 <- fit_rwd(kt[(s+1):Tn])
+
+  Lsum[u] <- f1$loglik + f2$loglik     # Sum of log-likelihood
+
+  # Number of parameters: two segments (drift, sigma)，breakpoint = 5;
+  # Calculate AIC
+  k_par <- 4
+  AICv[u] <- -2*Lsum[u] + 2*k_par
+}
+
+shat  <- cand[which.min(AICv)]
+year_hat <- years[shat]
+
+# Visualization
+plot(years[cand], Lsum, type = "l",
+     xlab = "Breakpoint year", ylab = "Sum log-likelihood",
+     main = "Profile of Sum Log-likelihood")
+abline(v = 2010, lty = 2)
+
+plot(years[cand], AICv, type = "l",
+     xlab = "Breakpoint Year", ylab = "AIC",
+     main = "Profile of AIC")
+abline(v = 2010, lty = 2)
+```
+
+```{r}
+## Fit segmented RWD models to common K(t)
+# 1) Fit segmented RWD models 
+s <- shat
+
+# Period 1
+f1 <- fit_rwd(kt[1:s])
+print(f1)
+
+# Period 2
+f2 <- fit_rwd(kt[(s+1):length(kt)])
+print(f2)
+
+# 2) Forecast K_t using f2 model 
+h <- 20
+forecast_f2 <- forecast(f2$fit, h = h)
+print(forecast_f2)
+
+# 3) Plot of forecast common K(t) with segmented drift
+plot(years, kt, type = "l",
+     xlab = "Year", ylab = "K(t)",
+     lwd = 2, main = "Forecast of Common K(t) with Segmented Drift",
+     xlim = c(min(years), max(years) + h),
+     ylim = c(-40, 40))
+
+
+abline(v = years[s], lty=2)
+tt <- (tail(years,1)+1):(tail(years,1)+h)           # Forecast years
+lines(tt, forecast_f2$mean, lty=1, lwd=2, col="blue" )
+lines(tt, forecast_f2$lower[, 2], lty = 2, lwd=2, col="blue")          # 95% lower bound
+lines(tt, forecast_f2$upper[, 2], lty = 2, lwd=2, col="blue" )          # 95% upper bound
+
+# fitted values for period 1 and 2
+fitted1 <- fitted(f1$fit)
+fitted2 <- fitted(f2$fit)
+
+fitted_all <- c(fitted1, fitted2)
+
+lines(years, fitted_all, col = "blue", lwd = 2, lty = 3)
+legend("topright", legend=c("Observed K(t)", "Fitted (Piecewise RWD)"),
+       col=c("black","blue"), lty=c(1,3), lwd=2, bty="n")
+
+
+```
+```{r}
+forecast_f2 <- as.numeric(forecast_f2$mean)
+forecasted2_log_mx <- data.frame()
+
+for (year in forecast_years) {
+  h <- year - max(years_male)
+
+  # Male log-mortality
+  log_mx_male <- a_hat_male + b_hat_common * forecast_f2[h]
+  df2_male <- data.frame(
+    Age = ages_male,
+    log_mx = log_mx_male,
+    Year = as.factor(year),
+    Sex = "Male"
+  )
+
+  # Female log-mortality
+  log_mx_female <- a_hat_female + b_hat_common * forecast_f2[h]
+  df2_female <- data.frame(
+    Age = ages_female,
+    log_mx = log_mx_female,
+    Year = as.factor(year),
+    Sex = "Female"
+  )
+
+  forecasted2_log_mx <- rbind(forecasted2_log_mx, df2_male, df2_female)
+}
+
+# plots
+
+ggplot(forecasted2_log_mx, aes(x = Age, y = log_mx, color = Year, linetype = Sex)) +
+  geom_line(size = 0.6) +
+  scale_linetype_manual(values = c("Male" = "solid", "Female" = "dotted")) +
+  labs(
+    title = "Forecasted Log Mortality Curves by Age and Gender",
+    x = "Age",
+    y = "Log Mortality Rate"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")      
+
+```
+```{r}
+## Calculate forecasted life expectancy at birth (e_0) and give a plot. 
+## 1. Function: 
+
+e0_from_mx <- function(mx_vec, sex = c("male", "female"), radix = 1e5) {
+  sex <- match.arg(sex)
+
+  n <- length(mx_vec)
+  ax <- rep(0.5, n)  # ax for ages x >= 1
+
+  ## Andreev–Kingkade (2015) approach for a0
+  m0 <- mx_vec[1]
+  if (sex == "male") {
+    if (m0 < 0.02300)      ax[1] <- 0.14929 - 1.99545 * m0
+    else if (m0 < 0.08307) ax[1] <- 0.02832 + 3.26021 * m0
+    else                   ax[1] <- 0.29915
+  } else {
+    if (m0 < 0.01724)      ax[1] <- 0.14903 - 2.05527 * m0
+    else if (m0 < 0.06891) ax[1] <- 0.04667 + 3.88089 * m0
+    else                   ax[1] <- 0.31411
+  }
+
+  ## qx
+  qx <- mx_vec / (1 + (1 - ax) * mx_vec)
+  qx[n] <- 1
+
+  ## Life table 
+  lx <- numeric(n)
+  Lx <- numeric(n)
+  lx[1] <- radix
+
+  for (i in 1:(n - 1)) {
+    dx      <- lx[i] * qx[i]
+    lx[i+1] <- lx[i] - dx
+    Lx[i]   <- lx[i+1] + ax[i] * dx
+  }
+  Lx[n] <- lx[n] / mx_vec[n]
+
+  Tx <- rev(cumsum(rev(Lx)))
+  e0 <- Tx[1] / lx[1]
+  return(e0)
+}
+
+## 2. Historical e0
+last_year <- max(years)
+
+hist_e0_male   <- subset(male,   Age == 0 & Year <= last_year, select = c("Year","ex"))
+hist_e0_female <- subset(female, Age == 0 & Year <= last_year, select = c("Year","ex"))
+names(hist_e0_male)   <- c("Year","e0")
+names(hist_e0_female) <- c("Year","e0")
+
+## 3. Generate future K_t and build future mx matrices for males/females (Coherent: use f2$fit)
+library(forecast)
+h  <- 20
+fc <- forecast::forecast(f2$fit, h = h)
+
+k_future <- as.numeric(fc$mean)                # future k_t
+k_lower  <- as.numeric(fc$lower[, 2])          # 95% lower bound (kept for consistency)
+k_upper  <- as.numeric(fc$upper[, 2])          # 95% upper bound (kept)
+years_forecast <- (last_year + 1):(last_year + length(k_future))
+
+bx  <- as.numeric(b_hat_common)
+ax_m <- as.numeric(a_hat_male)
+ax_f <- as.numeric(a_hat_female)
+
+stopifnot(length(bx)  == length(ages),
+          length(ax_m) == length(ages),
+          length(ax_f) == length(ages))
+
+## Future log mx
+log_mx_future_male   <- outer(bx, k_future, function(b, k) ax_m + b * k)
+log_mx_future_female <- outer(bx, k_future, function(b, k) ax_f + b * k)
+
+## Future mx
+mx_future_male   <- exp(log_mx_future_male)
+mx_future_female <- exp(log_mx_future_female)
+
+## 4. Convert m0 into e0 using AK method 
+e0_fore_male   <- numeric(length(k_future))
+e0_fore_female <- numeric(length(k_future))
+
+for (j in seq_along(k_future)) {
+  e0_fore_male[j]   <- e0_from_mx(mx_future_male[,   j], sex = "male")
+  e0_fore_female[j] <- e0_from_mx(mx_future_female[, j], sex = "female")
+}
+
+e0_fore_df <- rbind(
+  data.frame(Year = years_forecast, e0 = e0_fore_male,   Sex = "Male",   Type = "Coherent forecast"),
+  data.frame(Year = years_forecast, e0 = e0_fore_female, Sex = "Female", Type = "Coherent forecast")
+)
+
+## 5. reshape to wide format for plotting pipelines
+e0_table <- reshape(e0_fore_df[, c("Year", "Sex", "e0")],
+                    timevar = "Sex", idvar = "Year", direction = "wide")
+names(e0_table) <- gsub("\\.", "_", names(e0_table))   # Year, e0_Male, e0_Female
+e0_table <- e0_table[order(e0_table$Year), c("Year", "e0_Male", "e0_Female")]
+print(e0_table)
+
+## 6. Baseline: e0 under RWD (ARIMA(0,1,0) + drift)
+Arima010 <- forecast::Arima(k_hat_common, order = c(0, 1, 0), include.drift = TRUE)
+fc_rwd   <- forecast::forecast(Arima010, h = h)
+k_future_rwd <- as.numeric(fc_rwd$mean)
+
+log_mx_male_rwd   <- outer(bx, k_future_rwd, function(b, k) ax_m + b * k)
+log_mx_female_rwd <- outer(bx, k_future_rwd, function(b, k) ax_f + b * k)
+mx_male_rwd   <- exp(log_mx_male_rwd)
+mx_female_rwd <- exp(log_mx_female_rwd)
+
+e0_male_rwd   <- numeric(h)
+e0_female_rwd <- numeric(h)
+for (j in seq_len(h)) {
+  e0_male_rwd[j]   <- e0_from_mx(mx_male_rwd[,   j], sex = "male")
+  e0_female_rwd[j] <- e0_from_mx(mx_female_rwd[, j], sex = "female")
+}
+
+e0_table_rwd <- data.frame(
+  Year          = years_forecast,
+  e0_Male_RWD   = e0_male_rwd,
+  e0_Female_RWD = e0_female_rwd
+)
+
+# Plotting of observed + forecast e0 
+op <- par(lend = "round", ljoin = "round", bty = "l", las = 1, 
+          mgp = c(2.2, .7, 0), tcl = -0.3)
+
+x_all <- range(c(hist_e0_male$Year, hist_e0_female$Year,
+                 e0_table$Year, e0_table_rwd$Year), na.rm = TRUE)
+
+y_all <- range(c(hist_e0_male$e0, hist_e0_female$e0,
+                 e0_table$e0_Male,  e0_table$e0_Female,
+                 e0_table_rwd$e0_Male_RWD, e0_table_rwd$e0_Female_RWD),
+               na.rm = TRUE)
+
+y_pad <- diff(y_all) * 0.05
+y_all <- c(y_all[1] - y_pad, y_all[2] + y_pad)
+
+plot(NA, xlim = x_all, ylim = y_all,
+     xlab = "Year", ylab = "Life expectancy at birth e0",
+     main = "Observed and Forecast Life Expectancy at Birth")
+grid(nx = NA, ny = NULL, lty = "dotted", col = "grey85")
+
+# Historical curves
+lines(hist_e0_male$Year,   hist_e0_male$e0,   lwd = 2)          # male: solid
+lines(hist_e0_female$Year, hist_e0_female$e0, lwd = 2, lty = 2) # female: dashed
+
+# Forecast curves
+lines(e0_table$Year, e0_table$e0_Male,   lwd = 2)               # male: solid
+lines(e0_table$Year, e0_table$e0_Female, lwd = 2, lty = 2)      # female: dashed
+
+# RWD K(t) curves
+lines(e0_table_rwd$Year, e0_table_rwd$e0_Male_RWD,   lwd = 2)
+lines(e0_table_rwd$Year, e0_table_rwd$e0_Female_RWD, lwd = 2, lty = 2)
+
+# Add sparser year markers (e.g., every 2 years)
+mark_idx <- which((e0_table$Year - min(e0_table$Year)) %% 2 == 0)
+
+# Hollow points (pch=21; bg="white" creates hollow effect)
+points(e0_table$Year[mark_idx], e0_table$e0_Male[mark_idx],
+       pch = 21, bg = "white", cex = 1.1, lwd = 1.2)
+points(e0_table$Year[mark_idx], e0_table$e0_Female[mark_idx],
+       pch = 21, bg = "white", cex = 1.1, lwd = 1.2)
+
+points(e0_table_rwd$Year[mark_idx], e0_table_rwd$e0_Male_RWD[mark_idx],
+       pch = 24, bg = "white", cex = 1.05, lwd = 1.2)                   # male RWD
+points(e0_table_rwd$Year[mark_idx], e0_table_rwd$e0_Female_RWD[mark_idx],
+       pch = 24, bg = "white", cex = 1.05, lwd = 1.2)
+
+legend("bottomright", bty = "n",
+       legend = c("Historical male",
+                  "Historical female",
+                  "Forecast (RWD K(t))",
+                  "Forecast (segmented K(t))"),
+       lty    = c(1, 2, 1, 1),
+       pch    = c(NA, NA, 24, 21),
+       pt.bg  = c(NA, NA, "white", "white"),
+       lwd    = c(2, 2, 1.4, 1.4))
+par(op)  # restore par()
+
+```
+
+
+
+
+
+
