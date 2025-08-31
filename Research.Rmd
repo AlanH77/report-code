@@ -1361,7 +1361,7 @@ cat(sprintf("LRT: M0 vs M2 (add D2020): LR = %.2f, df = %d, p = %.4f\n",
             LR_20, k_diff_20, p_LRT_20))
 
 ## LRT：M2(2020) vs M1(2020+2021)
-k_diff_step <- (if (is.null(X_all)) 0L else ncol(X_all)) - k_diff_20  # 通常=1
+k_diff_step <- (if (is.null(X_all)) 0L else ncol(X_all)) - k_diff_20  
 LR_step     <- 2*(L1 - L2)
 p_LRT_step  <- if (k_diff_step > 0) pchisq(LR_step, df = k_diff_step, lower.tail = FALSE) else NA_real_
 
@@ -1685,7 +1685,6 @@ legend("bottomright", bty = "n",
        pt.bg  = c(NA, NA, "white", "white"),
        lwd    = c(2, 2, 1.4, 1.4))
 par(op)  # restore par()
-
 ```
 
 
