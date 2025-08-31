@@ -1,0 +1,571 @@
+---
+title: "Untitled"
+output: pdf_document
+date: "2025-07-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+
+male <- read.table("male.dat",header = TRUE)
+female <- read.table("female.dat",header = TRUE)
+
+# Replace 110+ with 110
+male$Age <- gsub("110\\+", "110", male$Age)
+male$Age <- as.numeric(male$Age)
+
+female$Age <- gsub("110\\+", "110", female$Age)
+female$Age <- as.numeric(female$Age)
+
+male$Sex   <- "Male"
+female$Sex <- "Female"
+
+data <- rbind(male, female)
+
+# Visualise data
+age_limits <- c(0, 1, 5, 15, 25, 35, 45, 55, 65, 75, 85, 95, 111)
+age_labels <- c("<1", "1-4", "5-14", "15-24", "25-34", "35-44",
+                "45-54", "55-64", "65-74", "75-84", "85-94", "95+")
+
+data$AgeGroup <- cut(
+  data$Age,
+  breaks = age_limits,
+  labels = age_labels,
+  right  = FALSE
+)
+
+# Calculate average mortality 
+avg_mx <- data %>%
+  group_by(Year, Sex, AgeGroup) %>%
+  summarise(mean_mx = mean(mx, na.rm = TRUE), .groups = "drop")
+
+# Plot Mortality Rates by Age Group (<1, 25–34, 95+) and Sex (1993–2022)
+library(ggplot2)
+
+ggplot(
+  filter(avg_mx, AgeGroup %in% c("<1", "25-34", "95+")),
+  aes(x = Year, y = 100 * mean_mx, color = Sex)
+) +
+  geom_line(size = 0.5) +     
+  geom_point(size = 1.5) +     
+  facet_wrap(~ AgeGroup, ncol = 1, scales = "free_y") +  
+  scale_color_manual(values = c("Male" = "#348ABD", "Female" = "#E24A33")) +
+  labs(
+    title  = " Average Mortality Rates by Age Group and Gender",
+    y      = "Mortality Rate (%)",
+    color  = "Sex"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+# Comments on the graph
+
+(1) In the < 1 age group, the mortality rate shows a declining trend, with male mortality consistently  higher than that of females.
+
+(2) In the 25–34 age group, the mortality rate is extremely low and the trend has flattened. This results in a low proportion of variance explained by the first principal component in  modeling of mortality, making this age group contribute less to the overall model fit (1992 Standard Lee-Cater). In this group, male mortality is approximately twice as high as female mortality, representing the largest gender disparity.
+
+(3) In the 95 + age group, the mortality rate shows large volatility. In addition, this elderly group has been most affected by the COVID-19 pandemic since 2020, leading to a significant increase in mortality. Mortality in other age groups has a slightly increase in the Covid-19 period.
+
+
+
+```{r}
+## Fit Standard Lee-Cater model for male 
+ages_male <- sort(unique(male$Age))
+years_male <- sort(unique(male$Year))
+
+# Define the log-mortality matrix of male
+log_mortality_male <- matrix(
+  NA, nrow = length(ages_male), ncol = length(years_male),
+  dimnames = list(ages_male, years_male))
+
+for (i in 1:nrow(male)) {
+  age_i <- male$Age[i]
+  year_i <- male$Year[i]
+  mx_i <- male$mx[i]
+  log_mortality_male[as.character(age_i), as.character(year_i)] <- log(mx_i)
+}
+
+print(log_mortality_male)
+
+# T = 30 years
+T <- ncol(log_mortality_male)
+print(T)
+
+# Calculate a_hat and normalize central death rates
+a_hat_male <- (1/T) * rowSums(log_mortality_male)
+Z_male <- log_mortality_male - a_hat_male
+
+# SVD to derive b_hat and K_hat
+svd <- svd(Z_male)
+
+b_hat_male <- -svd$u[, 1]
+sum_b <- sum(b_hat_male)
+b_hat_male <- b_hat_male / sum_b
+
+k_hat_male <- -sum_b * svd$d[1] * svd$v[, 1]
+
+# Plot estimates of male specific a_hat, b_hat and k_hat
+plot(years_male, k_hat_male, type = "l", pch = 16,
+     xlab = "Years", ylab = expression(hat(k)[t]),
+     main = "k_t (M)")
+
+plot(ages_male, a_hat_male, type = "l", pch = 16,
+     xlab = "Age Groups", ylab = expression(hat(a)[x]),
+     main = "a_hat (M)")
+
+plot(ages_male, b_hat_male, type = "l", pch = 16,
+     xlab = "Age Groups", ylab = expression(hat(b)[x]),
+     main = "b_hat (M)")
+```
+```{r}
+## Again Fit Standard Lee-Cater model for female 
+ages_female <- sort(unique(female$Age))
+years_female <- sort(unique(female$Year))
+
+# Define the log-mortality matrix of female
+log_mortality_female <- matrix(
+  NA, nrow = length(ages_female), ncol = length(years_female),
+  dimnames = list(ages_female, years_female)
+)
+
+for (i in 1:nrow(female)) {
+  age_i <- female$Age[i]
+  year_i <- female$Year[i]
+  mx_i <- female$mx[i]
+  log_mortality_female[as.character(age_i), as.character(year_i)] <- log(mx_i)
+}
+
+# Estimation Step
+T <- ncol(log_mortality_female)
+a_hat_female <- (1/T) * rowSums(log_mortality_female)
+Z_female <- log_mortality_female - a_hat_female
+
+svd_female <- svd(Z_female)
+
+b_hat_female <- -svd_female$u[, 1]
+sum_b <- sum(b_hat_female)
+b_hat_female <- b_hat_female / sum_b
+k_hat_female <- -sum_b * svd_female$d[1] * svd_female$v[, 1]
+
+# Plot estimates of female specific a_hat, b_hat and K_hat
+
+# K_t
+plot(years_female, k_hat_female, type = "l", lwd = 2, col = "red",
+     xlab = "Years", ylab = "K_t",
+     ylim = c(-20, 30), 
+     main = "k_t (Male vs Female)")
+
+lines(years_male, k_hat_male, col = "blue", lwd = 2)
+legend("bottomleft",
+       legend = c("Female", "Male"),
+       col = c("red", "blue"),
+       lwd = 2)
+
+# a_x
+plot(ages_female, a_hat_female, type = "l", col = "red", lwd = 2,
+     xlab = "Age Groups", ylab = "a_x",
+     main = "a_hat (Male vs Female)")
+
+lines(ages_male, a_hat_male, col = "blue", lwd = 2)
+legend("bottomright", legend = c("Female", "Male"),
+       col = c("red", "blue"), lwd = 2)
+
+# b_x
+plot(ages_female, b_hat_female, type = "l", col = "red", lwd = 2,
+     xlab = "Age Groups", ylab = "b_x",
+     main = "b_hat (Male vs Female)")
+
+lines(ages_male, b_hat_male, col = "blue", lwd = 2)
+legend("topright", legend = c("Female", "Male"),
+       col = c("red", "blue"), lwd = 2)
+
+
+```
+## Comments on choice of model fitting on mortality index K_t
+
+From the plot of the estimated K_t, it can be observed that the mortality index K_t for both males and females exhibits a linear decline in the first 20 years. However, since 2010, the rate of decline has slowed down and the trend has flattened, indicating non-linearity. For the standard random walk with drift parameter(RWD), the forecast for each gender is merely a straight line drawn through the first and last observed point and extended into the future. As the recent downward trend in mortality rates has slowed and become more stable, and there is a  rebound in 2020 due to the pandemic. Based on these observations, I chose to use the Box-Jenkins methodology to fit a general ARIMA model to the mortality index K_t and compared it with RWD.
+
+
+```{r}
+## Construct heatmap of residuals (Male)
+library(dplyr)
+library(tidyr)
+
+# Calculate fitted log-mortality of males and corresponding residuals
+log_mortality_fitted_male <- outer(b_hat_male, k_hat_male) + a_hat_male
+residuals_male <- log_mortality_male - log_mortality_fitted_male
+
+# Convert wide format into long format
+resid_df <- as.data.frame(residuals_male)
+colnames(resid_df) <- years_male
+resid_df$Age <- ages_male
+
+resid_long <- resid_df %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+# Remove ages between 0 and 0
+resid_long_filtered <- resid_long %>% filter(Age > 30)
+
+# Construct heatmap of residuals (difference between fitted value and data)
+ggplot(resid_long_filtered, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Heatmap of Residuals (Male): Observed - Fitted",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal()
+
+
+## Construct heatmap of residuals (Female)
+
+# Calculate fitted log-mortality of females and corresponding residuals
+log_mortality_fitted_female <- outer(b_hat_female, k_hat_female) + a_hat_female
+residuals_female <- log_mortality_female - log_mortality_fitted_female
+
+# Convert wide format into long format
+resid_df <- as.data.frame(residuals_female)
+colnames(resid_df) <- years_female
+resid_df$Age <- ages_female
+
+resid_long <- resid_df %>%
+  pivot_longer(cols = -Age, names_to = "Year", values_to = "Residual") %>%
+  mutate(Year = as.numeric(Year))
+
+# Remove ages between 0 and 30
+resid_long_filtered <- resid_long %>% filter(Age > 30)
+
+# Construct heatmap of residuals (difference between fitted value and data)
+ggplot(resid_long_filtered, aes(x = Year, y = Age, fill = Residual)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Heatmap of Residuals (Female): Observed - Fitted",
+    x = "Year", y = "Age", fill = "Residual"
+  ) +
+  theme_minimal()
+```
+## Comments on the heatmap of residuals (males)
+From the heatmap, I observe that the residuals for the 0–30 age group appear more random and tend to exhibit larger deviations. This is because mortality rates for younger individuals are generally very low, so even small fluctuations can lead to substantial changes in the log mortality rates. The model has a bad fit to the low age-specific mortality. However, errors in modeling and forecasting mortality for these age groups have minimal impact on overall life expectancy or the population age structure due to their low mortality (as discussed in the 1992 Lee-Carter literature). 
+
+Therefore, I only plotted the residuals for population aged over 30 to more clearly observe the cohort effect.
+
+
+
+```{r}
+## Forecast K_t for [male] using random walk with drift
+# Estimate drift parameter
+print(T)     
+theta_hat_male <- (k_hat_male[T] - k_hat_male[1]) / (T - 1)
+
+# Estimate sigma^2_rw
+resid_male <- diff(k_hat_male) - theta_hat_male
+sigma2_rw_male <- sum(resid_male^2) / (T - 1)
+
+var_theta_hat_male <- sigma2_rw_male / (T - 1) 
+print(theta_hat_male)
+
+# Forecast K_hat with standard randam walk with drift parameter theta_hat
+H <- 20  # forecast 20 years ahead (2023 - 2042)
+kt_forecast_male <- numeric(H)
+kt_forecast_male[1] <- k_hat_male[T] + theta_hat_male
+
+for (h in 2:H) {
+  kt_forecast_male[h] <- kt_forecast_male[h - 1] + theta_hat_male
+}
+
+
+# Create corresponding year labels
+forecast_years <- max(years_male) + 1:H
+print(forecast_years)
+
+## Plot forecast of k_t from random walk with drift 
+plot(c(years_male, forecast_years), c(k_hat_male, kt_forecast_male), type = "l",
+     xlab = "Year", ylab = "K_t",
+     main = "Forecast of k_t(M) ")
+lines(forecast_years, kt_forecast_male, col = "blue")
+
+# Confidence interval
+kt_sd_male <- sqrt((1:H) * sigma2_rw_male)
+kt_upper_male <- kt_forecast_male + 1.96 * kt_sd_male
+kt_lower_male <- kt_forecast_male - 1.96 * kt_sd_male
+print(kt_sd_male)          # Print the s.d of forecast K_t 
+print(kt_forecast_male)
+
+lines(forecast_years, kt_upper_male, col = "blue", lty = 2)
+lines(forecast_years, kt_lower_male, col = "blue", lty = 2)
+
+# Forecast log-mortality 
+# Create a matrix to store forecasted log-mortality
+log_mortality_forecast_male <- matrix(NA, nrow = length(ages_male), ncol = H,
+                                 dimnames = list(ages_male, forecast_years))
+
+# Apply Lee-Carter formula: m_xt = a_x + b_x * k_t
+for (h in 1:H) {
+  log_mortality_forecast_male[, h] <- a_hat_male + b_hat_male * kt_forecast_male[h]
+}
+
+```
+
+
+
+
+```{r}
+## Modeling and Forecast mortality index K_t for [male] using general arima model
+## Step 1: Identification
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1),   # Control plot spacing
+    mgp=c(2,0.75,0))
+
+# Time series plot of k_t
+plot(k_hat_male, type="l", lwd=2,
+     main = "Original k_t(M) series",
+     xlab = "Time", ylab = "k_t")
+
+# Sample ACF and PACF of k_t
+acf(k_hat_male, main = "", ylab = "Correlation"); title(main="ACF")
+pacf(k_hat_male, main = "", ylab = "Correlation"); title(main="PACF")
+
+
+# Plot the first order difference
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+
+plot(diff(k_hat_male), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Differenced k_t(M)", main = "First Difference of k_t(M)")
+
+# ACF and PACF of differenced k_t
+acf(diff(k_hat_male), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of First Difference")
+
+pacf(diff(k_hat_male), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of First Difference")
+
+# Plot the second order difference
+par(mfrow = c(3, 1), mar = c(3, 3, 2, 1), mgp = c(2, 0.75, 0)) 
+
+plot(diff(k_hat_male, differences = 2), type = "l", lwd = 2,
+     xlab = "Time", ylab = "Second-order difference",
+     main = "Second-order Differences of k_t(M)")
+
+# ACF and PACF 
+acf(diff(k_hat_male, differences =2), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "ACF of Second Difference")
+
+pacf(diff(k_hat_male, differences = 2), main = "", xlab = "Lag", ylab = "Correlation")
+title(main = "PACF of Second Difference")
+
+```
+```{r}
+library(forecast)
+
+# Fit ARIMA(1,2,0) model  
+ARIMA12 <- Arima(k_hat_male, order=c(1,2,0), include.drift = TRUE)       # Include a drift term
+print(ARIMA12)
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(ARIMA12)
+
+par(mfrow=c(1,1))
+qqnorm(resid(ARIMA12))
+AIC(ARIMA12)
+
+# Fit ARIMA(1,1,0) model
+ARIMA11 <- Arima(k_hat_male, order=c(1,1,0), include.drift = TRUE)
+print(ARIMA11)
+
+par(mfrow=c(3,1),  mar=c(3,3,2,1), mgp=c(2,0.75,0))
+tsdiag(ARIMA11)
+
+par(mfrow=c(1,1))
+qqnorm(resid(ARIMA11))
+
+#Interpretation: Still, second order differences of K_t for males have a clear pattern and suitable to fit a ARIMA(1,2,0).P-values for Ljung-Box test are all significantly greater than 0.05,showing no residuals autocorrelations. However, p-values for Ljung-Box test of ARIMA(1,1,0) indicates that p-values are not significant for first few lags.
+```
+```{r}
+## Model Prediction
+# Forecast next 20 years K_t of males using ARIMA(1,1,0)
+forecast_ARIMA11<- forecast(ARIMA11, h = 20)
+print(forecast_ARIMA11)
+
+forecast_df <- data.frame(
+  Year = (max(years_male) + 1):(max(years_male) + 20),
+  Forecast = forecast_ARIMA11$mean,
+  Lower = forecast_ARIMA11$lower[,2],  # 95% lower bound
+  Upper = forecast_ARIMA11$upper[,2]   # 95% upper bound
+)
+
+## PLot forecast of K_t from ARIMA11 with drift
+plot(c(years_male, forecast_df$Year),
+     c(k_hat_male, forecast_df$Forecast),
+     type = "l", xlab = "Year", ylab = expression(hat(k)[t]),
+     ylim = c(-40, 40), main = "Forecast of k_t(M) with Drift")
+
+lines(forecast_df$Year, forecast_df$Forecast, col = "blue")
+lines(forecast_df$Year, forecast_df$Upper, col = "blue", lty = 2)
+lines(forecast_df$Year, forecast_df$Lower, col = "blue", lty = 2)
+
+```
+
+
+
+```{r}
+# Forecast next 20 years K_t of males using ARIMA(1,2,0)
+preds <- predict(ARIMA12, n.ahead = 20, se.fit = TRUE)
+print(preds)
+
+# Calculate 95% prediction intervals
+lower <- preds$pred - 1.96 * preds$se
+upper <- preds$pred + 1.96 * preds$se
+
+# Construct year labels assuming last observed year is 2022
+forecast <- data.frame(
+  Year = 2023:2042,
+  Forecast = preds$pred,
+  Lower = lower,
+  Upper = upper
+)
+
+# Print the forecast table
+print(forecast)
+
+## Plot forecast of K_t from ARIMA12 without drift
+plot(c(years_male, forecast$Year), c(k_hat_male, forecast$Forecast), type = "l",
+     xlab = "Year", ylab = expression(hat(k)[t]),
+     ylim = c(-40,40),
+     main = "Forecast of k_t(M) ")
+
+lines(forecast$Year, forecast$Forecast, col = "red")
+lines(forecast$Year, forecast$Upper, col = "red", lty = 2)
+lines(forecast$Year, forecast$Lower, col = "red", lty = 2)
+```
+## Comments on the prediction interval of two models
+
+From the plots,we can see forecast of K_t of two models are quite similar. It continues the flattening trend since 2010, whereas the ARIMA(1,2,0) model shows a slightly declining trend.
+
+Although setting d = 2 can make the model stationary and satisfy assumptions about the residuals in time series modeling (eg. uncorrelated), applying second-order differencing severely amplifies the noise in the time series. As a result, the standard errors increase rapidly along with the forecast years, and the prediction intervals become excessively wide, and therefore losing interpretability.
+
+Base on these considerations, I chose ARIMA(1,1,0) as initial model of mortality index K_t of male.
+
+(I guess another reason might be sample size not enough,I only used 30 years mortality data (1993-2022) to fit this time series model and the length of forecast is 20 years, which may lead to model instability and large errors in long-term forecasts.)
+
+
+```{r}
+## Incorporate effect of pandemic in 2020 and 2021
+pandemic <- ifelse(years_male %in% c(2020,2021), 1, 0)
+
+ARIMAX <- Arima(k_hat_male, order = c(1, 1, 0), xreg = pandemic,include.drift = TRUE)
+print(ARIMAX)
+
+h <- 20      # Length of forecast
+future_pandemic <- rep(0, h)
+
+forecast_no_pandemic <- forecast(ARIMA11, h = h)
+
+forecast_with_pandemic <- forecast(ARIMAX, xreg = future_pandemic, h = h)
+print(forecast_with_pandemic)
+
+
+```
+
+## Comments on updated ARIMAX model 
+I incorporated a dummy variable: pandemic to capture the sustained impact of COVID-19 on mortality between year 2020 and 2021. This approach allows us to account for the temporary deviation in the mortality index K_t during the pandemic years.
+
+
+Q: Plausible research question: 
+(1) How did the Covid-19 affect the trend and forecast of mortality for male and female?
+
+(2) How can gender correlation improve mortality forecasting？
+    Main body: - Separate Model Vs Coherent Model
+               - Model comparison
+               - Consider impact of pandemic
+                 
+```{r}
+## Comparison of Forecasts from Different Models
+
+# Set forecast year
+years_forecast <- (max(years_male) + 1):(max(years_male) + h)
+
+# Create data frames for each model 
+# (1) Random walk with drift
+df_rw <- data.frame(
+  Year = years_forecast,
+  Forecast = kt_forecast_male,
+  Lower = kt_lower_male,
+  Upper = kt_upper_male,
+  Model = "Random Walk"
+)
+
+# (2) ARIMA(1,1,0) with drift parameter
+df_arima <- data.frame(
+  Year = years_forecast,
+  Forecast = forecast_ARIMA11$mean,
+  Lower = forecast_ARIMA11$lower[,2],
+  Upper = forecast_ARIMA11$upper[,2],
+  Model = "ARIMA(1,1,0)"
+)
+
+# (3) ARIMA(1,1,0) with drift and indicator of pandemic
+df_arimax <- data.frame(
+  Year = years_forecast,
+  Forecast = forecast_with_pandemic$mean,
+  Lower = forecast_with_pandemic$lower[,2],
+  Upper = forecast_with_pandemic$upper[,2],
+  Model = "ARIMAX with Pandemic"
+)
+
+# Combine all forecast results into a single long-format data frame
+forecast_all <- rbind(df_rw, df_arima, df_arimax)
+print(forecast_all)
+
+# Add observed values
+observed_df <- data.frame(
+  Year = years_male,
+  Forecast = k_hat_male
+)
+
+ggplot() +
+  # Observed k_t (black solid line)
+  geom_line(data = observed_df, aes(x = Year, y = Forecast), color = "black", size = 1.2) +
+  
+  # Forecast values from different models (solid lines)
+  geom_line(data = forecast_all, aes(x = Year, y = Forecast, color = Model), size = 1) +
+
+  # 95% confidence intervals (dashed lines)
+  geom_line(data = forecast_all, aes(x = Year, y = Upper, color = Model), linetype = "dashed", size = 0.7) +
+  geom_line(data = forecast_all, aes(x = Year, y = Lower, color = Model), linetype = "dashed", size = 0.7) +
+
+  labs(
+    title = "Forecast of k_t(M)",
+    subtitle = "1993–2022 Estimated (Black), 2023–2042 Forecast by Model",
+    x = "Year",
+    y = expression(hat(k)[t])
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = c(0.85, 0.85),    # Move legend inside plot (top right corner)
+    legend.background = element_rect(fill = "white", color = NA),
+    legend.title = element_blank(),
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12)
+  ) +
+  scale_color_manual(values = c(
+    "ARIMA(1,1,0)" = "#E41A1C",            
+    "ARIMAX with Pandemic" = "#4DAF4A",    
+    "Random Walk" = "#377EB8"             
+  ))
+
+
+```
+
+
+
+
+
+
